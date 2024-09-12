@@ -1,8 +1,8 @@
-
 #==================================================================================
 # \\ad.sfwmd.gov\dfsroot\data\wsd\sup\devel\source\R\ECSM_rain\NRDvsRainGage.R
 #==================================================================================
-# Modified for ECSM:  Kevin A. Rodberg -  April 2020
+# Modified for ECSM:  Kevin A. Rodberg -  Sept 2024
+#                     Kevin A. Rodberg -  April 2020
 #
 # Modified for LWC:   LWCPrepDataUsingMonthlyBiasMP.R
 # Programmer:         Felipe Amorano - 10/02/2018 
@@ -43,11 +43,18 @@ pkgChecker <- function(x){
   }
 }
 
-list.of.packages <-  c("reshape2","readr","dplyr","tidyr", "data.table","readxl","rgeos","sp",
-                       "dismo","lattice","rasterVis","maptools","raster","fields","automap",
-                       "gstat","future","listenv","ggplot2","RANN","geosphere")
-
+list.of.packages <-  c("reshape2","readr","dplyr","tidyr", "data.table",
+                       "readxl","terra","sp","raster","dismo","lattice",
+                       "rasterVis","RColorBrewer",
+                       #"maptools",
+                       "sf","fields","automap","gstat",
+                       "future","listenv","ggplot2","RANN","geosphere")
+.libPaths("H:/Docs/R/R-4.4.1/library")
 suppressWarnings(pkgChecker(list.of.packages))
+
+plan(multisession(workers = 8))
+basePath <- '//ad.sfwmd.gov/dfsroot/data/wsd/GIS/GISP_2012/DistrictAreaProj/ECSM/Data/'
+
 
 #---------------------------------------------------
 #  "Not In" Function
@@ -66,8 +73,10 @@ fixDecimals <- function(DF,decPlaces){
 #---------------------------------------------------
 # NAD83 HARN StatePlane Florida East FIPS 0901 Feet
 #---------------------------------------------------
-HARNSP17ft  = CRS("+init=epsg:2881")
-latlongs = CRS("+proj=longlat +datum=WGS84")
+#HARNSP17ft  = CRS("+init=epsg:2881")
+HARNSP17ft  = sf::st_crs(2881)
+#latlongs = CRS("+proj=longlat +datum=WGS84")
+latlongs = sf::st_crs(3857)
 
 #------------------------------------------------------------
 # Set up county boundry shapefile for overlay on raster maps
@@ -77,29 +86,46 @@ gClip <- function(shp, bb) {
     b_poly <- as(extent(as.vector(t(bb))), "SpatialPolygons")
   else
     b_poly <- as(extent(bb), "SpatialPolygons")
-  gIntersection(shp, b_poly, byid = T)
+  #gIntersection(shp, b_poly, byid = T)
+  terra::crop(shp,b_poly)
 }
 
 #------------------------------------------------------------
 # Used for clipping results to model bounary
 #------------------------------------------------------------
-ECSM.Path <- "//ad.sfwmd.gov/dfsroot/data/wsd/GIS/GISP_2012/DistrictAreaProj/ECSM"
+ECSM.Path <- paste0("//ad.sfwmd.gov/dfsroot/data/wsd",
+                    "/GIS/GISP_2012/DistrictAreaProj/ECSM")
 ECSM.Shape <- "ECSM_bnd.shp"
-setwd(ECSM.Path)
-ECSM <- readShapePoly(ECSM.Shape, proj4string = HARNSP17ft)
+ECSM.Shape <-  paste0("//ad.sfwmd.gov/dfsroot/data/wsd",
+                      "/GIS/GISP_2012/DistrictAreaProj/ECSM/",
+                      "ECSM_bnd.shp")
 
-WMDbnd.Path <- "//whqhpc01p/hpcc_shared/krodberg/NexRadTS"
+setwd(ECSM.Path)
+#ECSM <- readShapePoly(ECSM.Shape, proj4string = HARNSP17ft)
+#ECSM <- sf::st_read(ECSM.Shape)
+ECSM <- terra::vect(ECSM.Shape)
+#WMDbnd.Path <- "//whqhpc01p/hpcc_shared/krodberg/NexRadTS"
+WMDbnd.Path <-"//ad.sfwmd.gov/dfsroot/data/hpcc_shared/krodberg/NexRadTS"
 WMDbnd.Shape <- "CntyBnds.shp"
+WMDbnd.Shape <- paste0(WMDbnd.Path,"/CntyBnds.shp")
 setwd(WMDbnd.Path)
-WMDbnd <- readShapePoly(WMDbnd.Shape, proj4string = HARNSP17ft)
+#WMDbnd <- readShapePoly(WMDbnd.Shape, proj4string = HARNSP17ft)
+WMDbnd <- sf::st_read(WMDbnd.Shape)
 
 #------------------------------------------------------------
 # SQL used to query data to csv: ECSM_RainGage_1985to2019.sql
 #------------------------------------------------------------
-rainGageData<-read.csv("//ad.sfwmd.gov/dfsroot/data/wsd/GIS/GISP_2012/DistrictAreaProj/ECSM/Data/ECSM_RainGageV2.csv",stringsAsFactors = FALSE)
-rainGageData$YEAR = format(as.Date(rainGageData$DAILY_DATE, format="%m/%d/%Y"),"%Y")
-rainGageData$MONTH = format(as.Date(rainGageData$DAILY_DATE, format="%m/%d/%Y"),"%m")
-rainGageData$DAILY_DATE = as.Date(format(as.Date(rainGageData$DAILY_DATE, format="%m/%d/%Y"),"%Y-%m-%d"))
+# rainGageData<-read.csv(paste0("//ad.sfwmd.gov/dfsroot/data/wsd/GIS/GISP_2012/",
+#                               "DistrictAreaProj/ECSM/Data/ECSM_RainGageV2.csv"),
+#                        stringsAsFactors = FALSE)
+rainGageData<- fread(paste0("//ad.sfwmd.gov/dfsroot/data/wsd/GIS/GISP_2012/",
+                             "DistrictAreaProj/ECSM/Data/ECSM_RainGageV2.csv"),sep=',')
+
+rainGageData$DAILY_DATE = as.Date(rainGageData$DAILY_DATE, format="%m/%d/%Y")
+rainGageData$YEAR = lubridate::year(rainGageData$DAILY_DATE)
+rainGageData$MONTH = lubridate::month(rainGageData$DAILY_DATE)
+# rainGageData$YEAR = format(as.Date(rainGageData$DAILY_DATE, format="%m/%d/%Y"),"%Y")
+# rainGageData$MONTH = format(as.Date(rainGageData$DAILY_DATE, format="%m/%d/%Y"),"%m")
 
 rainGages<- unique(rainGageData[,c("STATION","AGENCY","XCOORD","YCOORD","DBKEY" )])
 rownames(rainGages) <- NULL
@@ -108,8 +134,8 @@ rownames(rainGages) <- NULL
 # Function  processes one year of data at a time to
 # provide async processing of function via "future" package
 #------------------------------------------------------------
-calcAnnualRainStats <- function(yr,i) {
-  cat(yr,sep='/n')
+calcAnnualRainStats <- function(yr,i, rg) {
+  cat(yr,sep=', ')
   #------------------------------------------------------------
   # Monthly NRD data files created with:  MonthlyNRDS.R
   #   Daily produced using NRD_ECSMviaDBHydro.R 
@@ -117,7 +143,10 @@ calcAnnualRainStats <- function(yr,i) {
   #           &  data type (NRD vs ECSM))
   #     which calls queryTotalNRDbyParams.R
   #------------------------------------------------------------
-  oneYr<-read.csv(paste0('G:/ECSM/Data/NRDrainMonthly',yr,'.csv'))
+  #oneYr<-read.csv(paste0('G:/ECSM/Data/NRDrainMonthly',yr,'.csv'))
+  oneYr<-read.csv(paste0('//ad.sfwmd.gov/dfsroot/data/wsd/GIS/GISP_2012',
+                         '/DistrictAreaProj/ECSM/Data/MonthlySummary_csvs/',
+                         'NRDrainMonthly',yr,'.csv'))
   closest<- nn2(oneYr[,3:4],rainGages[,3:4],1)
   index= closest[[1]]
   distance=closest[[2]]
@@ -127,39 +156,50 @@ calcAnnualRainStats <- function(yr,i) {
   nearestPixel$DBKEY <- as.character(nearestPixel$DBKEY)
   nearestPixel$Distance <- as.numeric(as.character(nearestPixel$Distance))
   
-  ECSM_NRD<- read_csv(paste0("G:/ECSM/Data/ECSM_NRD_",yr,".csv"))
+  ECSM_NRD<- read_csv(paste0('//ad.sfwmd.gov/dfsroot/data/wsd/GIS/GISP_2012',
+                                    '/DistrictAreaProj/ECSM/Data/MonthlySummary_csvs',
+                                    '/ECSM_NRD_',yr,'.csv'),show_col_types = FALSE)
   
-  meltNRD<-melt(ECSM_NRD,id=c("ROWnum","Pixel_id","X","Y"))
+  meltNRD<-reshape2::melt(as.data.frame(ECSM_NRD),id=c("Pixel_id","X","Y"))
+  # meltNRD<-melt(ECSM_NRD,id=c("ROWnum","Pixel_id","X","Y"))
   meltNRD$daily_date = as.character(meltNRD$variable)
   meltNRD$variable = as.character(meltNRD$variable)
-  LongWdates<-cbind(meltNRD[meltNRD$variable < "A",] %>% separate(variable, c("year", "month", "day")))
+  LongWdates<-cbind(meltNRD[meltNRD$variable < "A",] %>% 
+                      separate(variable, c("year", "month", "day")))
   LongWdates$daily_date <- as.Date(LongWdates$daily_date, format="%Y-%m-%d")
   #
   # Subset Gage data for the year and filter out specific codes
   #
-  RainG<- merge(x=rainGageData[rainGageData$YEAR==yr & rainGageData$CODE %!in% c('X','M','N','PT'),],
-                y=nearestPixel, by.x= 'DBKEY', by.y='DBKEY')
+  # RainG<- merge(x=rainGageData[rainGageData$YEAR==yr & 
+  #                                rainGageData$CODE %!in% c('X','M','N','PT'),],
+  #               y=nearestPixel, by.x= 'DBKEY', by.y='DBKEY')
+  
+  RainG<- merge(x=rg[rg$YEAR==yr &  rg$CODE %!in% c('X','M','N','PT'),],
+                y=nearestPixel, by.x= 'DBKEY', by.y='DBKEY')  
   
   Rain<-merge(x=RainG,  y=LongWdates[,c('Pixel_id','daily_date','value')],
               by.x=c('Pixel_id','DAILY_DATE'),by.y=c('Pixel_id','daily_date'))
   
-  names(Rain)<-c("Pixel_id","DAILY_DATE", "DBKEY","STATION","AGENCY","XCOORD","YCOORD","Gage","CODE",
+  names(Rain)<-c("Pixel_id","DAILY_DATE", "DBKEY","STATION","AGENCY",
+                 "XCOORD","YCOORD","Gage","CODE",
                  "YEAR","MONTH","Distance","NexRad" )
   
-  Rain$STATION <- as.factor(Rain$STATION)
+  #Rain$STATION <- as.factor(Rain$STATION)
   
   #-------------------------------------------------
   #  Remove extreme >20 inches and
   #  those really small values that are inconsistent
   #-------------------------------------------------
-  Rain<-filter(Rain, Gage >= 0.001 & Gage < 20 & 
-                        NexRad >= 0.00 & NexRad < 20 |
-                 round(Gage,2) == round(NexRad,2)) 
+  # Rain<-filter(Rain, Gage >= 0.001 & Gage < 20 & 
+  #                       NexRad >= 0.00 & NexRad < 20 |
+  #                round(Gage,2) == round(NexRad,2)) 
   #-------------------------------------------------
-  # Rain<-filter(Rain, (round(Gage,2) >= 0.01 & Gage < 20 & 
-  #                       round(NexRad,2) >= 0.01 & NexRad < 20) )
+  Rain<-filter(Rain, (round(Gage,2) >= 0.005 & Gage < 20 &
+                        round(NexRad,2) >= 0.005 & NexRad < 20) )
   
   Rain <- na.omit(Rain)
+  
+  options(dplyr.summarise.inform = FALSE)
   
   #-------------------------------------------------
   # Calculate Stats for Gage and NexRad bias
@@ -177,20 +217,37 @@ calcAnnualRainStats <- function(yr,i) {
     rename(Gage.obs = Gage) %>%
     subset(Gage.obs >10)
   
-  Corr_GageNexRad<-Rain %>%
+  noNAsdByGage<-Rain %>%
+    group_by(STATION,DBKEY,MONTH) %>%
+    summarize(sdGage = sd(Gage)) %>%
+    drop_na() %>%
+    subset(sdGage > 0)
+  
+  noNAsdByNexRad<-Rain %>%
+    group_by(STATION,DBKEY,MONTH) %>%
+    summarize(sdNexRad = sd(NexRad)) %>%
+    drop_na() %>%
+    subset(sdNexRad > 0) 
+  
+  rain4Corr<-merge(Rain,noNAsdByGage)
+  rain4Corr<-merge(rain4Corr,noNAsdByNexRad)
+  
+  Corr_GageNexRad<-rain4Corr %>%
     group_by(STATION,DBKEY,MONTH) %>%
     summarize(correlation = cor(Gage, NexRad, method = "kendall")) %>%
     drop_na() %>% 
-    subset(correlation >= .75 & correlation <= 1.0)
-  
-  RainStats<-  merge(rainGages,merge(Corr_GageNexRad,
-                                     merge(x=Rain.monthly.sum,y=Rain.monthly.obs),all.y=TRUE),all.x =TRUE)
+    subset(correlation >= .7 & correlation <= 1.0)
+
+  RainStats<-merge(rainGages,merge(Corr_GageNexRad,
+                                   merge(x=Rain.monthly.sum,
+                                         y=Rain.monthly.obs),
+                                   all.y=TRUE),all.x =TRUE)
   RainStats[is.na(RainStats$correlation),]$correlation = 0.0
   RainStats[is.na(RainStats$Gage.sum),]$Gage.sum = 0.0
   RainStats[is.na(RainStats$NexRad.sum),]$NexRad.sum = 0.0
   RainStats <- na.omit(RainStats)
   
-  write.csv(RainStats,paste0('h:/rainstats',yr,'.csv'))
+  #write.csv(RainStats,paste0('h:/rainstats',yr,'.csv'))
   
 
   RainStats$bias = RainStats$Gage.sum/RainStats$NexRad.sum
@@ -223,7 +280,7 @@ calcAnnualRainStats <- function(yr,i) {
   rStats<- RainStats[,c("STATION","YEAR","MONTH","XCOORD","YCOORD","Gage.obs","Gage.sum","NexRad.sum","bias")]
   
   ToPlot<- Rain[, !names(Rain) %in% c('STATION',"AGENCY","XCOORD","YCOORD","CODE","YEAR","MONTH","Distance","bias")]
-  testPlot=melt(ToPlot,id=c('Pixel_id','DBKEY','DAILY_DATE','Gage'))
+  testPlot=reshape2::melt(ToPlot,id=c('Pixel_id','DBKEY','DAILY_DATE','Gage'))
   
   # Swap Pixel_id and Station for plot grouping changes
     # ToPlot<- Rain[, !names(Rain) %in% c('Pixel_id',"AGENCY","XCOORD","YCOORD","CODE","YEAR","MONTH","Distance","bias")]
@@ -247,21 +304,26 @@ calcAnnualRainStats <- function(yr,i) {
   return(rStats)
 }
 
-plan(multiprocess)
+#plan(multicore(workers = 8))
 processed= listenv(NULL)
-
+singleprocessed = list()
 i=0
 
 for (yr in seq(2000,2018)){
     i = i + 1
-    processed[[i]] <- future({calcAnnualRainStats(yr,i)})
+    cat(i, yr, sep='\n')
+    #rg = rainGageData[rainGageData$YEAR == yr,]
+    processed[[i]] <- future({calcAnnualRainStats(yr,i,
+                            rainGageData[rainGageData$YEAR == yr,])})
+    #singleprocessed[i] <- calcAnnualRainStats(yr,i)
 }
+cat("",sep='/n')
 x=i
 my_data <- list()
 
 #-------------------------------------------------
-# value function waits for results to become available
-# for each process
+# value function waits for results to become 
+# available for each processed future
 #-------------------------------------------------
 for (i in seq(1:x)){
   my_data[[i]] <-value(processed[[i]])
@@ -269,10 +331,11 @@ for (i in seq(1:x)){
 
 allStats<-do.call(rbind,my_data)
 names(allStats)<- c('RainGage','year','month','XCOORD','YCOORD','count','sum_Rainfall','sum_NRD','adjF')
-
-basePath <-  "G:/ECSM/Data/"
-ECSM_NRD<- read_csv(paste0("G:/ECSM/Data/ECSM_NRD_",yr,".csv"))
-meltNRD<- na.omit(melt(ECSM_NRD,id=c("ROWnum","Pixel_id","X","Y")))
+# G: is \\ad.sfwmd.gov\dfsroot\data\wsd\GIS\GISP_2012
+ECSM_NRD<- read_csv(paste0('//ad.sfwmd.gov/dfsroot/data/wsd/GIS/GISP_2012/DistrictAreaProj',
+                           "/ECSM/Data/ECSM_NRD_",yr,".csv"))
+meltNRD<- na.omit(reshape2::melt(ECSM_NRD,id=c("Pixel_id","X","Y")))
+#meltNRD<- na.omit(melt(ECSM_NRD,id=c("ROWnum","Pixel_id","X","Y")))
 PixelCoords <- meltNRD[c("Pixel_id", "X", "Y")]
 
 #-------------------------------------------------
@@ -300,7 +363,7 @@ rasCols <- (xmax - xmin) / 6561.679
 # define raster and map extents using NRD pixel data extents
 #-------------------------------------------------
 ras <- raster(nrow=rasRows,ncol=rasCols,xmn=xmin,xmx=xmax,
-              ymn=ymin,ymx=ymax,crs=HARNSP17ft)
+              ymn=ymin,ymx=ymax,crs=CRS("epsg:2881"))
 rasExt <- extent(ras)
 clpBnds2 <- gClip(ECSM, rasExt)
 
@@ -312,7 +375,7 @@ clpBnds2 <- gClip(ECSM, rasExt)
 #-------------------------------------------------
 dayBiasFn <- function(DailyNRD,biasRas){
   DailyNRD.pnts <-SpatialPointsDataFrame(coords = DailyNRD[, c("X", "Y")],
-                                         data = DailyNRD,proj4string = HARNSP17ft)
+                                         data = DailyNRD,proj4string = CRS("epsg:2881"))
   NRDras <-rasterize(DailyNRD.pnts, ras, DailyNRD.pnts$value, fun = mean) * biasRas
   NRDBiasPnts <- raster::extract(NRDras,DailyNRD.pnts,fun=mean,df=TRUE)
   NRDBiasPnts$Pixel_id <- DailyNRD.pnts$Pixel_id
@@ -329,19 +392,20 @@ dayBiasFn <- function(DailyNRD,biasRas){
 # updates NRD with annual totals
 #-------------------------------------------------
 biasByYearMon <-function(yearStr,monStr,x){
-  ECSM_NRDbyYr<- read_csv(paste0(basePath,"ECSM_NRD_",yearStr,".csv"))
+  ECSM_NRDbyYr<- read_csv(paste0(basePath,"ECSM_NRD_",yearStr,".csv"),
+                          show_col_types = FALSE)
   
   dateList<-names(ECSM_NRDbyYr)[-c(1,2,3,4,length(names(ECSM_NRDbyYr)))]
-  NRDbyYr <- melt(ECSM_NRDbyYr, id = c("ROWnum","Pixel_id", "X", "Y"))
-  NRDbyYr$ROWnum<-NULL
-  
+  NRDbyYr <- reshape2::melt(ECSM_NRDbyYr, id = c("Pixel_id", "X", "Y"))
+  # NRDbyYr <- melt(ECSM_NRDbyYr, id = c("ROWnum","Pixel_id", "X", "Y"))
+  # NRDbyYr$ROWnum<-NULL  
   #-------------------------------------------------
   # read and organize daily NexRad data
   #-------------------------------------------------
   for (d in dateList[1]) {
     DailyNRD <- NRDbyYr[NRDbyYr$variable == d, ]
     DailyNRD.pnts <-SpatialPointsDataFrame(coords = DailyNRD[, c("X", "Y")],
-                                           data = DailyNRD, proj4string = HARNSP17ft)
+                                           data = DailyNRD, proj4string = CRS("epsg:2881"))
     
     NRDras <-rasterize(DailyNRD.pnts, ras, DailyNRD.pnts$value, fun = mean) 
     #    NRDBiasPnts <- data.frame(extract(NRDras, DailyNRD.pnts))
@@ -352,47 +416,28 @@ biasByYearMon <-function(yearStr,monStr,x){
   
   mon <- as.numeric(monStr)
   RGdata <- na.omit(allStats[allStats$year == yearStr & 
-                       allStats$month == monStr
+                       allStats$month == mon
                              & allStats$adjF <400,])
   
   #   If has no monthly RGdata values ... Setting some dummy values
   
-  if (nrow(RGdata)==0) {
+  if (nrow(RGdata)<2) {
     cat (paste('Trying to skip',yearStr, monStr,' Due to lack of data\n'))
     RGdata <- na.omit(allStats[allStats$year == yearStr & 
-                                 allStats$month =='01'
+                                 allStats$month ==6
                                & allStats$adjF <400,])
-    RGdata$month = '04'; RGdata$sum_NRD = 0.0; RGdata$sum_Rainfall = 0.0; RGdata$adjF=1.0
+    RGdata$month = mon; RGdata$sum_NRD = 0.0; RGdata$sum_Rainfall = 0.0; RGdata$adjF=1.0
     rainGage.pnts <- SpatialPointsDataFrame(coords = RGdata[, c("XCOORD", "YCOORD")],
-                                            data = RGdata,proj4string = HARNSP17ft)
-    # biasStuff <-list("B_ras"=NRDras,
-    #                  "R_pnts"=DailyNRD.pnts,
-    #                  "C_pnts"=DailyNRD.pnts,
-    #                  "MonthlyRas"=NRDras,
-    #                  "MonNRDRas"=NRDras,
-    #                  "year"=as.numeric(yearStr),
-    #                  "month"=as.numeric(monStr),
-    #                  "monthlyNRDbias"=as.data.frame(NRDPixel[,c(1,2,3,ncol(NRDPixel))]),
-    #                  "dailyNRDbias" = as.data.frame(NRDPixel[,-c(ncol(NRDPixel))]))
-    # biasStuff <-list("B_ras"=biasRas,
-    #                  "R_pnts"=rainGage.pnts,
-    #                  "C_pnts"=rainClustData,
-    #                  "MonthlyRas"=MonRas,
-    #                  "MonNRDRas"=NRDMonRas,
-    #                  "year"=as.numeric(yearStr),
-    #                  "month"=as.numeric(monStr),
-    #                  "monthlyNRDbias"=as.data.frame(NRDbiasPixels[,c(1,2,3,ncol(NRDbiasPixels))]),
-    #                  "dailyNRDbias" = as.data.frame(NRDbiasPixels[,-c(ncol(NRDbiasPixels))])
-    #)
-  }
+                                            data = RGdata,proj4string = CRS("epsg:2881"))
+   }
     
     #-------------------------------------------------
     # Interpolate Bias from RainGages to NexRad pixels
     # Make NRD data correction using Bias
     #-------------------------------------------------
     rainGage.pnts <- SpatialPointsDataFrame(coords = RGdata[, c("XCOORD", "YCOORD")],
-                                            data = RGdata,proj4string = HARNSP17ft)
-    latlongPnts <- spTransform(rainGage.pnts,latlongs)
+                                            data = RGdata,proj4string = CRS("epsg:2881"))
+    latlongPnts <- spTransform(rainGage.pnts,CRS("+proj=longlat +datum=WGS84"))
     distMatrix <-distm(latlongPnts)
     hc <- hclust(as.dist(distMatrix), method="complete")
     
@@ -420,17 +465,17 @@ biasByYearMon <-function(yearStr,monStr,x){
     
     biasData<-biasVals
     coordinates(biasData) =  ~ XCOORD + YCOORD
-    proj4string(biasData) = HARNSP17ft
+    proj4string(biasData) = CRS("epsg:2881")
     biasData$XHARN <- coordinates(biasData)[, 1]
     biasData$YHARN <- coordinates(biasData)[, 2]
-    biasData <- spTransform(biasData,HARNSP17ft)
+    biasData <- spTransform(biasData,CRS("epsg:2881"))
     
     rainClustData<-rainVals
     coordinates(rainClustData) =  ~ XCOORD + YCOORD
-    proj4string(rainClustData) = HARNSP17ft
+    proj4string(rainClustData) = CRS("epsg:2881")
     rainClustData$XHARN <- coordinates(rainClustData)[, 1]
     rainClustData$YHARN <- coordinates(rainClustData)[, 2]
-    rainClustData <- spTransform(rainClustData,HARNSP17ft)
+    rainClustData <- spTransform(rainClustData,CRS("epsg:2881"))
     
     #NRDras <- rasterize(DailyNRD.pnts, ras, DailyNRD.pnts$value, fun = mean)
     
@@ -442,8 +487,8 @@ biasByYearMon <-function(yearStr,monStr,x){
     #-------------------------------------------------
     #  autoKrige implemented for Ordinary kriging
     #-------------------------------------------------
-    if (min(biasData@data$adjF)==max(biasData@data$adjF)){
-    #### create empty or single value raster) ####
+    if (min(biasData@data$adjF)==max(biasData@data$adjF) || (nrow(biasData) < 5)) {
+    #### create empty or single value raster or using minimal points) ####
     #  IDW raster code:
       gs <- gstat(formula=adjF~1, locations=biasData)
       biasRas <- interpolate(ras, gs)
@@ -488,7 +533,7 @@ biasByYearMon <-function(yearStr,monStr,x){
     #-------------------------------------------------
     Monthly <-NRDbiasPixels[,c(1,2,3,ncol(NRDbiasPixels))]
     xy <- Monthly[,c(2,3)]
-    Monthlypdf <-SpatialPointsDataFrame(coords=xy,data=Monthly,proj4string=HARNSP17ft)
+    Monthlypdf <-SpatialPointsDataFrame(coords=xy,data=Monthly,proj4string=CRS("epsg:2881"))
     MonRas <- rasterize(Monthlypdf,ras,Monthlypdf@data[,4],fun=mean)
     rainClustData$NRD <- raster::extract(MonRas,rainClustData,fun=mean,df=TRUE)[,2]
     
@@ -507,7 +552,7 @@ biasByYearMon <-function(yearStr,monStr,x){
     #-------------------------------------------------
     MonNRDs<-ECSM_NRDbyYr[,c(2,3,4,ncol(ECSM_NRDbyYr))]
     xy <- MonNRDs[,c(2,3)]
-    MonNRDsspdf <-SpatialPointsDataFrame(coords=xy,data=MonNRDs,proj4string=HARNSP17ft)
+    MonNRDsspdf <-SpatialPointsDataFrame(coords=xy,data=MonNRDs,proj4string=CRS("epsg:2881"))
     NRDMonRas <- rasterize(MonNRDsspdf,ras,MonNRDsspdf$Monthly,fun=mean)
     rainClustData$Nexrad <- raster::extract(NRDMonRas,rainClustData,fun=mean,df=TRUE)[,2]
     
@@ -658,10 +703,12 @@ difTheme = rasterTheme(region = brewer.pal('Spectral', n = 11))
 # Create plot files for each raster type by month
 #-------------------------------------------------
 plotOneRas <- function(filename, rasPlt, rasPltName, points, pltTheme, atVals,clpBnds2,WMDbnd){
+  Bnds2plt=as(clpBnds2, "Spatial")
+
   myplot=( levelplot(rasPlt, par.settings=pltTheme, main=rasPltName, 
                      at=atVals,layout=c(1,1),contour=FALSE, margin=F) +
-             latticeExtra::layer(sp.polygons(clpBnds2)) +                
-             latticeExtra::layer(sp.polygons(WMDbnd)) +
+                latticeExtra::layer(sp.polygons(Bnds2plt)) +
+                latticeExtra::layer(sp.polygons(as(WMDbnd[1],'Spatial'))) +
              latticeExtra::layer(sp.text(coordinates(points),txt=points$RainGage,pos=1,cex=.5 )) +
              latticeExtra::layer(sp.points(points, col = "red"))
   )
@@ -681,11 +728,14 @@ pltStackItems<-function(MonNRDLayer,points,ClustPoints,rasLayer,MonrasLayer){
     }
     pltTheme <- adjTheme
     atVals <-c(seq(0,28,length=29),35)
+    Bnds2plt=as(clpBnds2, "Spatial")
+    #Bnds2plt=sf::st_as_sf(clpBnds2)
+	#terra::as.polygons(clpBnds2)
     NRDplot=( levelplot(rasPlt, par.settings=pltTheme, main=rasPltName, 
                         at=atVals, xlab = NULL, margin=F,
                         layout=c(1,1),contour=FALSE) +
-                latticeExtra::layer(sp.polygons(clpBnds2)) +
-                latticeExtra::layer(sp.polygons(WMDbnd)) +
+                latticeExtra::layer(sp.polygons(Bnds2plt)) +
+                latticeExtra::layer(sp.polygons(as(WMDbnd[1],'Spatial'))) +
                 latticeExtra::layer(sp.text(coordinates(ClustPoints),
                                             txt=as.character(round((ClustPoints$sum_Rainfall-
                                                                       ClustPoints$Nexrad),2)),pos=1,cex=.5 )) +
@@ -719,11 +769,13 @@ pltStackItems<-function(MonNRDLayer,points,ClustPoints,rasLayer,MonrasLayer){
     rasPltName <-paste("Bias Adjusted NexRad\n",names(MonrasLayer))
     pltTheme <- adjTheme
     atVals <-c(seq(0,28,length=29),35)
+    Bnds2plt=as(clpBnds2, "Spatial")
+
     NRDBiasplot=( levelplot(rasPlt, par.settings=pltTheme, main=rasPltName, 
                             at=atVals, xlab = NULL, margin=F,
                             layout=c(1,1),contour=FALSE) +
-                    latticeExtra::layer(sp.polygons(clpBnds2)) +
-                    latticeExtra::layer(sp.polygons(WMDbnd)) +
+                    latticeExtra::layer(sp.polygons(Bnds2plt)) +
+                    latticeExtra::layer(sp.polygons(as(WMDbnd[1],'Spatial'))) +
                     latticeExtra::layer(sp.text(coordinates(ClustPoints),
                                                 txt=as.character(round(ClustPoints$sum_Rainfall-
                                                                          (ClustPoints$NRD),2)),
@@ -750,11 +802,13 @@ pltStackItems<-function(MonNRDLayer,points,ClustPoints,rasLayer,MonrasLayer){
     if( sum(is.na(points@data$adjF)) >0 ){
       points@data[is.na(points@data$adjF),]$adjF = 1
     }
+    Bnds2plt=as(clpBnds2, "Spatial")
+
     diffRasPlt=( levelplot(rasPlt, par.settings=pltTheme, main=rasPltName, 
                            at=atVals, xlab = NULL, margin=F,
                            layout=c(1,1),contour=FALSE) +
-                   latticeExtra::layer(sp.polygons(clpBnds2)) +                
-                   latticeExtra::layer(sp.polygons(WMDbnd)) +
+                    latticeExtra::layer(sp.polygons(Bnds2plt)) +
+                   latticeExtra::layer(sp.polygons(as(WMDbnd[1],'Spatial'))) +
                    latticeExtra::layer(sp.text(coordinates(ClustPoints),
                                                txt=as.character(round(ClustPoints$sum_Rainfall-
                                                                         (ClustPoints$NRD),2)),
@@ -785,15 +839,13 @@ processed= listenv(NULL)
 # for (i in 1:5){
   
 for (i in 1:nlayers(rasStack)){
-  #pltStackItems(MonNRDStack[[i]],pointList[[i]],ClustPntList[[i]],rasStack[[i]],MonRasStack[[i]])
-  # processed[[i]] <- future({pltStackItems(MonNRDStack[[i]],pointList[[i]],
-  #                                         ClustPntList[[i]],rasStack[[i]],MonRasStack[[i]])})
   MonNRDLayer=MonNRDStack[[i]];points=pointList[[i]];ClustPoints=ClustPntList[[i]]
   rasLayer=rasStack[[i]];MonrasLayer=MonRasStack[[i]]
   if( sum(is.na(ClustPoints@data$bias)) >0 ){
     ClustPoints@data[is.na(ClustPoints@data$bias),c('bias', 'NRD', 'Nexrad')]<-0
   }
-  processed[[i]] <- future({pltStackItems(MonNRDLayer,points,ClustPoints,rasLayer,MonrasLayer)})
+  #processed[[i]] <- future({pltStackItems(MonNRDLayer,points,ClustPoints,rasLayer,MonrasLayer)})
+  processed[[i]] <- pltStackItems(MonNRDLayer,points,ClustPoints,rasLayer,MonrasLayer)
   cat(paste(names(MonNRDStack[[i]]),'\n'))
 }
 
