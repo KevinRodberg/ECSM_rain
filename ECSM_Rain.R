@@ -6,8 +6,8 @@ library(reshape2)
 # Here is the path to the rainfall binary file (not accessible from PC):
 #   /nw/hesm_san/data/rain/rain_v4.7_1914_2018_sfwmd.bin
 
-#  split ecsm_roco...txt into 3 files because cell_cat is ilmited to a 1000 cells.
-#  Data gets saved to pc accissible H:/ecsmRain...dat
+#  split ecsm_roco...txt into 3 files because cell_cat is limited to a 1000 cells.
+#  Data gets saved to pc accessible H:/ecsmRain...dat
 #  Backup copy made to \\ad.sfwmd.gov\dfsroot\data\wsd\sup\devel\source\R\ECSM_rain
 
 # cell_cat -i ~/ecsm_roco1.txt -o ~/ecsmRain1.dat -y 19850101,20181231 rain_v4.7_1914_2018_sfwmd.bin
