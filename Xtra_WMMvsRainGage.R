@@ -1,3 +1,40 @@
+#===============================================================================
+#  Program: Xtra_WMMvsRainGage.R 
+#           \\ad.sfwmd.gov\dfsroot\data\wsd\sup\devel\source\R\ECSM_rain\
+#===============================================================================
+# Code History:
+# --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# Original:       PrepDataUsingBiasMP.R            Kevin A. Rodberg - 05/11/2018
+# update  LWC:    LWCPrepDataUsingMonthlyBiasMP.R  Felipe Zamorano -  10/02/2018
+# update  ECSM:   NRDvsRainGage.R                  Kevin A. Rodberg - April 2020
+# update  ECSM:   Xtra_WMMvsRainGage.R             Kevin A. Rodberg -  July 2020
+#                   Extend WMM pixels South of grid  
+#                   more functions setup to use multiprocessing 
+# --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# >>> Execution with Multiprocessors significantly reduces execution time
+# --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+#  General Description:
+# --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- --- ---
+# -Calculates monthly bias multipliers from RainGage vs WMM Pixels.
+# -Bias multipliers at Rain Gages are interpolated using Ordinary Kriging
+#     producing a monthly 'bias' raster.   
+# -Daily WMM Pixels are rasterized and multiplied by the 'bias' raster 
+#     producing 'bias adjusted' Daily WMM rasters
+# -'bias adjusted' Daily WMM rasters are converted back to WMM pixels 
+#     by extracting raster values from the rasters at pixel points locations.  
+# -Daily pixels values by row are combined as columns and exported to csv 
+#     with an Monthly total column added.
+# -Finally, Raster plots of Monthly data are also produced showing:
+#     Interpolated Bias, Uncorrected WMM, Bias Corrected WMM, 
+#       Difference in Original vs Corrected
+#===============================================================================
+
+list.of.packages <-  c("reshape2","readr","dplyr","tidyr", "data.table",
+                       "readxl","rgeos","sp", "dismo", "lattice","rasterVis",
+                       "maptools","raster","fields","automap", "gstat",
+                       "future","listenv","ggplot2","RANN","geosphere",
+                       "tcltk2", "RColorBrewer")
+
 pkgChecker <- function(x){
   for( i in x ){
     if( ! require( i , character.only = TRUE ) ){
@@ -6,17 +43,9 @@ pkgChecker <- function(x){
     }
   }
 }
-
-list.of.packages <-  c("reshape2","readr","dplyr","tidyr", "data.table",
-                       "readxl","rgeos","sp", "dismo","lattice","rasterVis",
-                       "maptools","raster","fields","automap", "gstat",
-                       "future","listenv","ggplot2","RANN","geosphere")
-
 suppressWarnings(pkgChecker(list.of.packages))
-yrSeq<-seq(1985,2018)
-#yrSeq<-seq(1985,1986)
-
-'%!in%' <- function(x,y)!('%in%'(x,y))
+#yrSeq<-seq(1985,2000)
+yrSeq<-seq(2001,2018)
 
 fixDecimals <- function(DF,decPlaces){
   is.num <-sapply(DF,is.numeric)
@@ -35,6 +64,7 @@ gClip <- function(shp, bb) {
   gIntersection(shp, b_poly, byid = T)
 }
 
+'%!in%' <- function(x,y)!('%in%'(x,y))
 calcRainStats<-function(basePath,yr,wideXtra,RG){
   # FUNCTION: calcRainStats
   #   [Works well with future function for multiprocessing]
@@ -48,8 +78,9 @@ calcRainStats<-function(basePath,yr,wideXtra,RG){
   ECSM_WMM<-rename(ECSM_WMM,wmmRoCo=variable)
   ECSM_WMM$ROWnum = NULL
   ECSM_WMM$Annual = NULL
-  col.num=0
+
   # Drop column day 366 from non-Leap years
+  col.num=0
   if( yr/4 - (yr%/%4) != 0) {
     col.num <- which(colnames(wideXtra) %!in% colnames(ECSM_WMM))
     wideXtra[,col.num]<- NULL
@@ -138,12 +169,19 @@ calcRainStats<-function(basePath,yr,wideXtra,RG){
   if( sum(is.na(RainStats$bias)) >0 ){
     RainStats[is.na(RainStats$bias),]$bias <-1
   }
-  if (dim(RainStats[RainStats$bias<.5,])[1] >0){
-    RainStats[RainStats$bias<.5,]$bias <- .5
+  # if (dim(RainStats[RainStats$bias<.5,])[1] >0){
+  #   RainStats[RainStats$bias<.5,]$bias <- .5
+  # }
+  # if (dim(RainStats[RainStats$bias>4.,])[1] >0){
+  #   RainStats[RainStats$bias>4.,]$bias <- 4.0
+  # }
+#Do No Bias Correction.  
+  if (dim(RainStats[RainStats$bias<.99,])[1] >0){
+    RainStats[RainStats$bias<1,]$bias <- .99
   }
-  if (dim(RainStats[RainStats$bias>3.,])[1] >0){
-    RainStats[RainStats$bias>3,]$bias <- 3.0
-  }
+  if (dim(RainStats[RainStats$bias>1.01,])[1] >0){
+    RainStats[RainStats$bias>1.01,]$bias <- 1.01
+  }  
   # RainStats[RainStats$Gage.obs < SignificantDays,]$bias <- 1
   RainStats$YEAR<-yr
   RainStats<-merge(nnRowCo, merge(rainGages,RainStats))
@@ -166,20 +204,24 @@ calcRainStats<-function(basePath,yr,wideXtra,RG){
   #   as variables may have evolved since intial coding
   #--------------------------------------------------------------
   
-  # ToPlot<- Rain[, !names(Rain) %in% c('STATION',"AGENCY","XCOORD","YCOORD","CODE","YEAR","MONTH","dist","bias")]
-  # #ToPlot<- Rain[, !names(Rain) %in% c('wmmRoCo',"AGENCY","XCOORD","YCOORD","CODE","YEAR","MONTH","dist","bias")]
+  # ToPlot<- Rain[, !names(Rain) %in% c('STATION',"AGENCY","XCOORD","YCOORD",
+  #                                     "CODE","YEAR","MONTH","dist","bias")]
+  # #ToPlot<- Rain[, !names(Rain) %in% c('wmmRoCo',"AGENCY","XCOORD","YCOORD",
+  #                                      "CODE","YEAR","MONTH","dist","bias")]
   # #testPlot=melt(ToPlot,id=c('STATION','DBKEY','DAILY_DATE','Gage'))
   # testPlot=melt(ToPlot,id=c('wmmRoCo','DBKEY','DAILY_DATE','Gage'))
   
   # for (stn in unique(testPlot$wmmRoCo)){
   #   cat (stn,sep='\n')
   # 
-  #   filename = paste("G:/ECSM/Data/graphWMMcorrection/",stn,"_",yr,".png", sep = "" )
-  #   png(  file = filename, width = 3000,height = 3000,units = "px",  res=300)
+  #   fileName = paste("G:/ECSM/Data/graphWMMcorrection/",stn,"_",yr,".png", sep = "" )
+  #   png(  file = fileName, width = 3000,height = 3000,units = "px",  res=300)
   # 
   #   p <- ggplot(testPlot[testPlot$wmmRoCo==stn,],aes(x=value, y=Gage,
-  #                                            color = paste(DBKEY,variable,sep='_'),shape=DBKEY)) +
+  #                                            color = paste(DBKEY,variable,
+  #                                          sep='_'),shape=DBKEY)) +
   #     labs(title =stn, color = 'wmmRain') +
+  #     geom_point() +
   #     geom_point() +geom_smooth(method = "lm")
   #   print(p)
   #   dev.off()
@@ -205,8 +247,7 @@ dayBiasFn <- function(DailyWMM,biasRas){
   return(WMMBiasPnts[c(3,4,5,2)])
 }
 
-biasByYearMon <-function(basePath,allStats,Rain,southernRain,
-                         yearStr,monStr,x){
+biasByYearMon <-function(basePath,allStats,Rain,southRain,yearStr,monStr,x){
   yr = as.numeric(yearStr)
   #-------------------------------------------------
   # FUNCTION: biasByYearMon
@@ -244,9 +285,9 @@ biasByYearMon <-function(basePath,allStats,Rain,southernRain,
   for (d in dateList[1]) {
     #-------------------------------------------------
     #  Theisen Polygon and raster code to fill in southern area:
-    firstDay<-unique(southernRain$DAILY_DATE)[1]
+    firstDay<-unique(southRain$DAILY_DATE)[1]
     theisPoly <- 
-      voronoi(southernRain[southernRain$DAILY_DATE==firstDay,])
+      voronoi(southRain[southRain$DAILY_DATE==firstDay,])
     TheisRas <- rasterize(theisPoly, ras, theisPoly$VALUE, fun = mean)
     
     DailyWMM <- WMMbyYr[WMMbyYr$variable == d, ]
@@ -265,6 +306,7 @@ biasByYearMon <-function(basePath,allStats,Rain,southernRain,
     
     DailyWMM.grid <- as(mergeRas, "SpatialGridDataFrame")
   }
+
   WMMPixel<- data.frame(DailyWMM.pnts$wmmRoCo, DailyWMM.pnts$X, DailyWMM.pnts$Y)
   WMMxPixel<- data.frame(oneYr$wmmRoCo, oneYr$XHARN, oneYr$YHARN)
   names(WMMxPixel)<-c("wmmRoCo","X","Y")
@@ -272,47 +314,44 @@ biasByYearMon <-function(basePath,allStats,Rain,southernRain,
   WMMxPixel<- WMMxPixel[WMMxPixel$Y <= SouthMost,]
   mon <- as.numeric(monStr)
   RGdata <- na.omit(allStats[allStats$year == yearStr & 
-                               allStats$month == monStr
-                             & allStats$adjF <400,])
-  #   April 2001 has no RGdata values 
-  
+                               allStats$month == monStr &
+                               allStats$adjF <101,])
+  # RGdata <- na.omit(allStats[allStats$year == yearStr & 
+  #                              allStats$month == monStr &
+  #                              allStats$adjF <400,])
+    #   April 2001 has no RGdata values 
   if (nrow(RGdata)==0) {
     cat (paste("No Rain Gage data for",yearStr, monStr,'\n'))
-    biasStuff <-list("B_ras"=WMMras,
-                     "R_pnts"=DailyWMM.pnts,
-                     "MonthlyRas"=WMMras,
-                     "MonWMMRas"=WMMras,
-                     "year"=as.numeric(yearStr),
-                     "month"=as.numeric(monStr),
-                     "monthlyWMMbias"=as.data.frame(WMMPixel[,c(1,2,3,ncol(WMMPixel))]),
-                     "dailyWMMbias" = as.data.frame(WMMPixel[,-c(ncol(WMMPixel))])
+    biasStuff <-
+		  list("B_ras"=WMMras,
+           "R_pnts"=DailyWMM.pnts,
+					 "MonthlyRas"=WMMras,
+					 "MonWMMRas"=WMMras,
+					 "year"=as.numeric(yearStr),
+					 "month"=as.numeric(monStr),
+					 "monthlyWMMbias"=as.data.frame(WMMPixel[,c(1,2,3,ncol(WMMPixel))]),
+					 "dailyWMMbias" = as.data.frame(WMMPixel[,-c(ncol(WMMPixel))])
     )
-  } else
-  {
+  } else {
     #-------------------------------------------------
     # Interpolate Bias from RainGages to wmmRain pixels
     # Make WMM data correction using Bias
     #-------------------------------------------------
     rainGage.pnts <- SpatialPointsDataFrame(coords = RGdata[,c("XCOORD", "YCOORD")],
                                             data = RGdata,proj4string = HARNSP17ft)
-    #<<<< Delete this if it works>>>>
-    # rainGage.pnts <- SpatialPointsDataFrame(coords = RGdata[RGdata$YCOORD > SouthMost, c("XCOORD", "YCOORD")],
-    #                                         data = RGdata,proj4string = HARNSP17ft)    
     latlongPnts <- spTransform(rainGage.pnts,latlongs)
     distMatrix <-distm(latlongPnts)
     hc <- hclust(as.dist(distMatrix), method="complete")
     #latlongPnts$clust <-cutree(hc,h=2000)
     latlongPnts$clust <-cutree(hc,h=4500)
     tempdf <- as.data.frame(latlongPnts)
-    
-    biasVals2 <- aggregate(cbind(XCOORD, YCOORD, adjF)~clust, tempdf, mean,na.rm=TRUE) 
+    biasVals2 <- aggregate(cbind(XCOORD, YCOORD, adjF)~clust, tempdf, 
+		                       mean,na.rm=TRUE) 
     biasVals<-biasVals2[, c("XCOORD", "YCOORD", "adjF")]
-    
     biasVals <- biasVals[biasVals$XCOORD> WMMras@extent[1] 
                          & biasVals$XCOORD< WMMras@extent[2]
                          & biasVals$YCOORD> WMMras@extent[3] 
                          & biasVals$YCOORD< WMMras@extent[4],]
-    
     biasData<-biasVals
     coordinates(biasData) =  ~ XCOORD + YCOORD
     proj4string(biasData) = HARNSP17ft
@@ -324,9 +363,11 @@ biasByYearMon <-function(basePath,allStats,Rain,southernRain,
     #-------------------------------------------------
     #  autoKrige implemented for Ordinary kriging
     #-------------------------------------------------
-    surf <- autoKrige(formula=adjF ~ 1, input_data=biasData, new_data = DailyWMM.grid)
+    surf <- autoKrige(formula=adjF ~ 1, input_data=biasData, 
+		                  new_data = DailyWMM.grid)
     biasRas <- raster(surf$krige_output)
-    rainGage.pnts$bias <- raster::extract(biasRas,rainGage.pnts,fun=mean,df=TRUE)[,2]
+    rainGage.pnts$bias <- raster::extract(biasRas,rainGage.pnts,
+		                                      fun=mean,df=TRUE)[,2]
     
     #-------------------------------------------------
     #  IDW raster code:
@@ -356,14 +397,14 @@ biasByYearMon <-function(basePath,allStats,Rain,southernRain,
       #-------------------------------------------------
       #  Theisen Polygon and raster code:
       theisPoly <- 
-        voronoi(southernRain[southernRain$DAILY_DATE==
+        voronoi(southRain[southRain$DAILY_DATE==
                                dayLUp[dayLUp$dateList==d,]$V2,])
       TheisRas <- rasterize(theisPoly, ras, theisPoly$VALUE, fun = mean)
       
       #-------------------------------------------------
       #   Extract Southern area pixels from TheisRas
       #-------------------------------------------------
-      #WMMxPnts <- raster::extract(TheisRas,southernRain,fun=mean,df=TRUE)
+      #WMMxPnts <- raster::extract(TheisRas,southRain,fun=mean,df=TRUE)
       WMMxPnts <- raster::extract(TheisRas,oneYr[oneYr$YHARN<=SouthMost,],fun=mean,df=TRUE)
       WMMras <- rasterize(DailyWMM.pnts, ras, DailyWMM.pnts$value, fun = mean)
       WMMxPnts$wmmRoCo<-oneYr[oneYr$YHARN<=SouthMost,]$wmmRoCo
@@ -432,173 +473,250 @@ biasByYearMon <-function(basePath,allStats,Rain,southernRain,
     #     (3 rasters & 1 points),
     #   Year and month
     #    and 2 dataframes    
-    biasStuff <-list("B_ras"=biasRas,
-                     "R_pnts"=rainGage.pnts,
-                     "MonthlyRas"=MonRas,
-                     "MonWMMRas"=WMMMonRas,
-                     "year"=as.numeric(yearStr),
-                     "month"=as.numeric(monStr),
-                     "monthlyWMMbias"=as.data.frame(WMMbiasPixels[,c(1,ncol(WMMbiasPixels))]),
-                     "dailyWMMbias" = as.data.frame(WMMbiasPixels[,-c(ncol(WMMbiasPixels))])
+    Ncols=ncol(WMMbiasPixels)
+    biasStuff <-
+		  list("B_ras"=biasRas,
+		       "Rain.pnts"=rainGage.pnts,
+           "MonthlyRas"=MonRas,
+					 "MonWMMRas"=WMMMonRas,
+					 "year"=as.numeric(yearStr),
+					 "month"=as.numeric(monStr),
+					 "monthlyWMMbias"=as.data.frame(WMMbiasPixels[,c(1,Ncols)]),
+					 "dailyWMMbias" = as.data.frame(WMMbiasPixels[,-c(Ncols)])
     )
   }
-  
-  #cat(paste(names(as.data.frame(WMMbiasPixels[,-c(ncol(WMMbiasPixels))])),'\n'))
   return(biasStuff)
 }
 
-aggPnts<- function(pntsPlt){
-  #-------------------------------------------------
+aggPnts<- function(gageR.pnts){
+  #---------------------------------------------------
   # FUNCTION: aggPnts
   # Aggegates data using bias point location clusters
   #   calculating values to be used for bubble plots
-  #------------------------------------------------- 
-  latlongPnts <- spTransform(pntsPlt,latlongs)
+  #---------------------------------------------------
+  latlongPnts <- spTransform(gageR.pnts,latlongs)
   distMatrix <-distm(latlongPnts)
   hc <- hclust(as.dist(distMatrix), method="complete")
   #latlongPnts$clust <-cutree(hc,h=2000)
   latlongPnts$clust <-cutree(hc,h=4500)
   tempdf <- as.data.frame(latlongPnts)
-  biasPnts <- aggregate(cbind(XCOORD, YCOORD, adjF, bias, sum_Rain, sum_WMM)~clust, tempdf, mean,na.rm=TRUE) 
+  biasPnts <- aggregate(cbind(XCOORD, YCOORD, adjF, bias, sum_Rain, 
+	                            sum_WMM)~clust, tempdf, mean,na.rm=TRUE) 
   biasPnts$Corrected <- biasPnts$sum_WMM*biasPnts$bias
   biasPnts$ObsVsAdj <- biasPnts$sum_Rain-biasPnts$Corrected
+  biasPnts$ObsPcnt <- 100*(biasPnts$sum_Rain-biasPnts$sum_WMM)/biasPnts$sum_Rain
+  # Fix division by 0
+  if (nrow(biasPnts[!is.finite(biasPnts$ObsPcnt),])>0){
+    biasPnts[!is.finite(biasPnts$ObsPcnt),]$ObsPcnt<-0
+  }
+  # limit values divided by very small values
+  if (nrow(biasPnts[biasPnts$ObsPcnt>500,])>0){
+    biasPnts[biasPnts$ObsPcnt>500,]$ObsPcnt<-0
+  }  
+  # ignore values divided by very small values
+  if (nrow(biasPnts[biasPnts$ObsPcnt< -500,])>0){
+    biasPnts[biasPnts$ObsPcnt< -500,]$ObsPcnt<- 0
+  }
+  # Fix division by 0
+  biasPnts$AdjPcnt <- 100*(biasPnts$ObsVsAdj)/biasPnts$sum_Rain
+  if (nrow(biasPnts[!is.finite(biasPnts$AdjPcnt),])>0){
+    biasPnts[!is.finite(biasPnts$AdjPcnt),]$AdjPcnt<-0
+  }  
+  # limit values divided by very small values
+  if (nrow(biasPnts[biasPnts$AdjPcnt>500,])>0){
+    biasPnts[biasPnts$AdjPcnt>500,]$AdjPcnt<-0
+  }  
+  # limit values divided by very small values
+  if (nrow(biasPnts[biasPnts$AdjPcnt< -500,])>0){
+    biasPnts[biasPnts$AdjPcnt< -500,]$AdjPcnt<- -0
+  }
   coordinates(biasPnts) =  ~ XCOORD + YCOORD
   proj4string(biasPnts) = HARNSP17ft
   return(biasPnts)
 }  
 
-plotOneRas <- function(filename, rasPlt, rasPltName, pntsPlt, 
-                       pltTheme, atVals,clpBnds2){
-  #-------------------------------------------------
-  # Create plot files for each raster type by month
-  #-------------------------------------------------  
-  panel1 = paste('Bias Multiplier',rasPltName, '\nRed Crosses = Rain Gages')
-  
-  myplot=( levelplot(rasPlt, par.settings=pltTheme, main=panel1, 
-                     at=atVals,layout=c(1,1),contour=FALSE, margin=F) +
+plt1ras <- function(fileName, bias.ras, bias.rasName, gageR.pnts, pltTheme, atVals,clpBnds2){
+  #---------------------------------------
+  # Create plot panel for a single raster 
+  #---------------------------------------  
+  panel1 = paste0(bias.rasName,' Bias Multiplier ', 
+                  '\nRed \'+\' = Gage Location')
+    myplot=( levelplot(bias.ras, par.settings=pltTheme, main=panel1, 
+                     colorkey=list(space="left"),
+                     # ylab=list(label="\n",cex=.75),
+                     scales = list(x=list(rot=45),y=list(rot=45),cex=.5),
+             at=atVals,layout=c(1,1),contour=FALSE, margin=F) +
              latticeExtra::layer(sp.polygons(clpBnds2)) +
-             latticeExtra::layer(sp.text(coordinates(pntsPlt),txt=pntsPlt$RainGage,pos=1,cex=.5 )) +
-             latticeExtra::layer(sp.points(pntsPlt, col = "red"))
+             latticeExtra::layer(sp.text(coordinates(gageR.pnts),
+						               txt=gageR.pnts$RainGage,pos=1,cex=.4 )) +
+             latticeExtra::layer(sp.points(gageR.pnts, col = "red"))
   )
   return(myplot)
 }
 
-
-plt4rasters <-function(outPath,PltName,
-                       MonWMMPlt,rasPlt,AdjPlt,diffPlt,pntsPlt){
-
-  filename=paste(outPath,"BiasPlotsWMM/points",PltName,"X",".png",sep="")
-  #diffPlt <-AdjPlt -MonWMMPlt
-  aggPts <-aggPnts(pntsPlt)
+plt4ras <-function(outPath,pltName,wmmR.ras,bias.ras,adjR.ras,diffR.ras,gageR.pnts,aggR.pnts){
+  #-------------------------------------------------------------
+  # Create plot files showing 4 raster comparison types by month
+  #-------------------------------------------------------------
+  fileName=paste(outPath,"BiasPlots/points",pltName,"X",".png",sep="")
+  titleStr = paste(month.abb[as.numeric(substr(gsub("X","",pltName),5,6))],
+                  substr(gsub("X","",pltName),1,4))
+  #diffR.ras <-adjR.ras -wmmR.ras
+  aggR.pnts <-aggPnts(gageR.pnts)
   myTheme = rasterTheme(region = brewer.pal('GnBu', n = 9))
   divTheme = rasterTheme(region = brewer.pal('PiYG', n = 11))
-  adjTheme = rasterTheme(region = brewer.pal('GnBu', n = 9))
+  adjTheme1 = rasterTheme(region = brewer.pal('GnBu', n = 9))
+  adjTheme2 = rasterTheme(region = brewer.pal('GnBu', n = 9))
   difTheme = rasterTheme(region = brewer.pal('RdBu', n = 11))
-  
-  pltTheme <- adjTheme
-  atVals <-c(0,seq(5,20,length=16),30)
-  panel2 = paste('Uncorrected ',PltName,'\n','Black O = Underestimate')
-  WMMplot=( levelplot(MonWMMPlt, par.settings=pltTheme, main=panel2, 
-                      at=atVals, xlab = NULL, margin=F,
-                      layout=c(1,1),contour=FALSE) +
+  # ------------------------
+  # Monthly WMM Rain Raster 
+  # ------------------------  
+  pltTheme <- adjTheme1
+  atVals <-c(seq(0,5,length=11),seq(6,15,length=4),seq(20,35,length=2))
+  panel2 = paste0('Monthly WMM Rain','\nBlack O = % Underestimate')
+
+  WMMplot=( levelplot(wmmR.ras, 
+                      par.settings=pltTheme,
+                      main=panel2,at=atVals, 
+                      xlab = NULL,margin=FALSE, 
+                      colorkey=FALSE,
+                      scales = list(y=list(at=NULL),x=list(rot=45),cex=.5),
+                      ylab=list(label="\n\n\n\n",cex=.75),
+                      contour=FALSE) +
               latticeExtra::layer(sp.polygons(clpBnds2)) +
-              latticeExtra::layer(sp.text(coordinates(aggPts),
-                                          txt=as.character(round((aggPts$sum_Rain-aggPts$sum_WMM),2)),
-                                          pos=1,cex=.5 )) +
-              latticeExtra::layer(sp.points(aggPts,pch=1, 
-                                            cex=round((aggPts$sum_Rain-aggPts$sum_WMM)*.6,2),
-                                            col = "black")) +             
-              latticeExtra::layer(sp.points(aggPts,pch=1, 
-                                            cex=round((aggPts$sum_Rain-aggPts$sum_WMM)*-.6,2),
-                                            col = "red"))
-  )
-  
-  # Plot Monthly Bias Raster 
+              latticeExtra::layer(sp.text(coordinates(aggR.pnts),
+                            txt=as.character(round(aggR.pnts$ObsPcnt,0)),
+                            pos=1,cex=.5 )) +
+              latticeExtra::layer(sp.points(aggR.pnts,pch=1, 
+                            cex=2*round(aggR.pnts$ObsPcnt/-100.,2),
+                            col = "black")) +             
+              latticeExtra::layer(sp.points(aggR.pnts,pch=1, 
+                            cex=2*round(aggR.pnts$ObsPcnt/100.,2),
+                            col = "red"))
+            )
+
+  # ------------------------
+  # Monthly Bias Raster 
+  # ------------------------
   pltTheme <- divTheme
-  #atVals <-seq(0,4,length=21)
   atVals <-c(.50,.55,.60,.65,.70,.75,.80,.85,.90,.95,
-             1.0,1.2,1.4,1.6,1.8,2.,2.2,2.4,2.6,2.8,3.0)
-  
-  Biasplot=plotOneRas(filename, rasPlt, PltName,pntsPlt, pltTheme, atVals,clpBnds2)
-  
-  #   Plot Monthly Bias Adjusted wmmRain
-  
-  pltTheme <- adjTheme
-  atVals <-c(0,seq(5,20,length=16),30)
-  panel3 = paste('Adjusted ',PltName,'\n','Red O = Overestimate')
-  WMMBiasplot=( levelplot(AdjPlt, par.settings=pltTheme, main=panel3, 
-                          at=atVals, xlab = NULL, margin=F,
-                          layout=c(1,1),contour=FALSE) +
+             1.0,1.2,1.4,1.6,1.8,2.,2.2,2.4,2.6,2.8,3.0,3.5,4.0)
+  # uses "plt1ras" function which may be adapted to each of the panels
+  Biasplot <-
+    plt1ras(fileName, bias.ras, titleStr,gageR.pnts, pltTheme, atVals,clpBnds2)
+
+  # -------------------------------------  
+  # Monthly Bias Adjusted wmmRain
+  # -------------------------------------  
+  pltTheme <- adjTheme2
+  atVals <-c(seq(0,5,length=11),seq(6,15,length=4),seq(20,35,length=2))
+  panel3 = paste0('Adjusted Monthly WMM Rain','\nRed O = % Overestimate')
+   
+  WMMBiasplot=( levelplot(adjR.ras, par.settings=pltTheme, main=panel3, 
+                          colorkey=list(space="left"),
+                          at=atVals, xlab = NULL, 
+                          margin=FALSE,
+                          scales = list(y=list(at=NULL),
+                                        x=list(rot=45),cex=.5),
+                          ylab=list(label="\n",cex=0.75),
+                          contour=FALSE) +
                   latticeExtra::layer(sp.polygons(clpBnds2)) +
-                  latticeExtra::layer(sp.text(coordinates(aggPts),
-                                              txt=as.character(round(aggPts$ObsVsAdj,2)),
+                  latticeExtra::layer(sp.text(coordinates(aggR.pnts),
+                                              txt=as.character(round(aggR.pnts$AdjPcnt,0)),
                                               pos=1,cex=.5 )) +
-                  latticeExtra::layer(sp.points(pntsPlt,pch=1, 
-                                                cex=round((aggPts$ObsVsAdj*.6),2),col="black")) +             
-                  latticeExtra::layer(sp.points(pntsPlt,pch=1, 
-                                                cex=round((aggPts$ObsVsAdj*-.6),2),col="red"))
+                  latticeExtra::layer(sp.points(aggR.pnts,pch=1, 
+                                                cex=2*round(aggR.pnts$AdjPcnt/-100.,2),
+																								col="black")) +             
+                  latticeExtra::layer(sp.points(aggR.pnts,pch=1, 
+                                                cex=2*round(aggR.pnts$AdjPcnt/100.,2),
+																								col="red"))
   )
-  #   Plot Monthly Bias Adjusted wmmRain - WMM
+	
+  # ------------------------------------------------------  
+  # Monthly Difference [Bias Adjusted wmmRain - WMM]
+  # ------------------------------------------------------  
   pltTheme <- difTheme
-  atVals <-c(-15,-10,-6,seq(-3,3,length=20),6,10,15)
+  atVals <-c(-20,-10,seq(-5,5,length=21),10,20)
   
-  if( sum(is.na(pntsPlt@data$bias)) >0 ){
-    pntsPlt@data[is.na(pntsPlt@data$bias),]$bias = 1
-  }
   # Note = 'Black circles = pixels < observed'
   # Note = 'Red circles = pixels > observed'
-  panel4 = paste('Inches of Change\n',PltName)
-  diffPlt=(levelplot(diffPlt,par.settings=pltTheme,main=panel4,at=atVals,
-                     xlab = NULL,margin=F,layout=c(1,1),contour=FALSE) +
+  panel4 = paste0('Inches of Change Raster','\nValues= +/-"@Gage Clusters')
+
+  diffPlt=(levelplot(diffR.ras,par.settings=pltTheme,main=panel4,at=atVals,
+                     xlab = NULL,
+                     colorkey=list(space="right"),margin=FALSE,
+                     scales = list(y=list(at=NULL),
+                                   x=list(rot=45),cex=.5),
+                     contour=FALSE) +
              latticeExtra::layer(sp.polygons(clpBnds2)) +
-             latticeExtra::layer(sp.text(coordinates(aggPts),
-                                         txt=as.character(round(aggPts$ObsVsAdj,2)), 
+             latticeExtra::layer(sp.text(coordinates(aggR.pnts),
+                                         txt=as.character(round(aggR.pnts$ObsVsAdj,2)), 
                                          pos=1,cex=.5 )) +
-             latticeExtra::layer(sp.points(pntsPlt,pch=1,
-                                           cex=aggPts$ObsVsAdj*.6, col = "black")) +             
-             latticeExtra::layer(sp.points(pntsPlt,pch=1,
-                                           cex=aggPts$ObsVsAdj*-.6, col = "red"))
+             latticeExtra::layer(sp.points(aggR.pnts,pch=1,
+                                           cex=round(aggR.pnts$ObsVsAdj*-1,2), 
+                                           col = "red")) +             
+             latticeExtra::layer(sp.points(aggR.pnts,pch=1,
+                                           cex=round(aggR.pnts$ObsVsAdj*1,2), 
+                                           col = "blue"))
   )
-  trellis.device(device="png", filename=filename, 
-                 width=4800,height=2400,units="px",res=300)
+  # ------------------------------------------  
+  # combine the plot panels to print
+  # ------------------------------------------  
+  trellis.device(device="png", filename=fileName, 
+                 width=4000,height=2400,units="px",res=300)
+  
+  par.main.text=trellis.par.get('par.main.text')
+  par.main.text$just = "left"
+  par.main.text$cex = .5
+  par.main.text$font = 1
+  par.main.text$x = grid::unit(.4, "in")
+  trellis.par.set('par.main.text',par.main.text)
   print(Biasplot, split    = c(1,1,4,1),more=TRUE)
+  
+  par.main.text$just = "right"
+  par.main.text$x = grid::unit(3.0, "in")
+  trellis.par.set('par.main.text',par.main.text)  
   print(WMMplot, split     = c(2,1,4,1),more=TRUE)
+  
+  par.main.text$just = "left"
+  par.main.text$x = grid::unit(.75, "in")
+  trellis.par.set('par.main.text',par.main.text)
   print(WMMBiasplot, split = c(3,1,4,1),more=TRUE)
+  
+  par.main.text$just = "right"
+  par.main.text$x = grid::unit(2.75, "in")
+  trellis.par.set('par.main.text',par.main.text)
   print(diffPlt, split  = c(4,1,4,1))
   dev.off()
-  return(PltName)
+  return(pltName)
 }
 
-#---------------------------------------------------
-# NAD83 HARN StatePlane Florida East FIPS 0901 Feet
-#---------------------------------------------------
-HARNSP17ft  = CRS("+init=epsg:2881")
-latlongs = CRS("+proj=longlat +datum=WGS84")
-WMDbnd.Path <- "//whqhpc01p/hpcc_shared/krodberg/NexRadTS"
-WMDbnd.Shape <- "CntyBnds.shp"
-setwd(WMDbnd.Path)
-WMDbnd <- readShapePoly(WMDbnd.Shape, proj4string = HARNSP17ft)
+########################
+##    PROGRAM BODY    ##
+########################
+
 GISPath <- "//ad.sfwmd.gov/dfsroot/data/wsd/GIS/GISP_2012/DistrictAreaProj/"
 ProjPath <- "ECSM/Data/"
 basePath <- paste0(GISPath,ProjPath)
 #---------------------------------------------------
 #  Read Rain Gage Data if not already in memory
 #---------------------------------------------------
-if(exists("rainGageData") && object.size(rainGageData) > 350000000 ){
+if(exists("gageR.df") && object.size(gageR.df) > 350000000 ){
   cat(paste('Skipped Reading data: ECSM_RainGageV2.csv','\n'))  
 } else 
-{
+  {
   cat(paste('Reading data: ECSM_RainGageV2.csv','\n'))
-  rainGageData<-read.csv(paste0(basePath,"ECSM_RainGageV2.csv"),stringsAsFactors = FALSE)
-  rainGageData$YEAR = format(as.Date(rainGageData$DAILY_DATE, format="%m/%d/%Y"),"%Y")
-  rainGageData$MONTH = format(as.Date(rainGageData$DAILY_DATE, format="%m/%d/%Y"),"%m")
-  rainGageData$DAILY_DATE = as.Date(format(as.Date(rainGageData$DAILY_DATE, format="%m/%d/%Y"),"%Y-%m-%d"))
-  rainGages<- unique(rainGageData[,c("STATION","AGENCY","XCOORD","YCOORD","DBKEY" )])
+  gageR.df<-read.csv(paste0(basePath,"ECSM_RainGageV2.csv"),stringsAsFactors = FALSE)
+  gageR.df$YEAR = format(as.Date(gageR.df$DAILY_DATE, format="%m/%d/%Y"),"%Y")
+  gageR.df$MONTH = format(as.Date(gageR.df$DAILY_DATE, format="%m/%d/%Y"),"%m")
+  gageR.df$DAILY_DATE = as.Date(format(as.Date(gageR.df$DAILY_DATE, 
+	                                          format="%m/%d/%Y"),"%Y-%m-%d"))
+  rainGages<- 
+	  unique(gageR.df[,c("STATION","AGENCY","XCOORD","YCOORD","DBKEY" )])
   rownames(rainGages) <- NULL
   rainGages<-na.omit(rainGages)
 }
  
-
 #---------------------------------------------------------
 # Define raster mapping extents 
 #   and
@@ -606,13 +724,12 @@ if(exists("rainGageData") && object.size(rainGageData) > 350000000 ){
 # based upon WMM cell spacing plus rain data South of WWM
 #---------------------------------------------------------
 cat(paste('Creating Rain pixel structure','\n'))
-
-i=0
 #---------------------------------------------------------
 # Random Leap Year
 #---------------------------------------------------------
 yr =2000
 oneYr<-read.csv(paste0(basePath,'wmmRain',yr,'.csv'))
+i=0
 
 #---------------------------------------------------------
 # Define pixel Size
@@ -633,18 +750,30 @@ ymax = ceiling(max(oneYr[c('Ycoord')])+halfPixel)
 rasRows <- floor((ymax - ymin) /(pixSz))
 rasCols <- floor((xmax - xmin) /(pixSz))
 
+#---------------------------------------------------
+# NAD83 HARN StatePlane Florida East FIPS 0901 Feet
+# and WGS84 Lat/Long Spatial Reference variables
+#---------------------------------------------------
+HARNSP17ft  = sp::CRS("+init=epsg:2881")
+latlongs = sp::CRS("+proj=longlat +datum=WGS84")
+WMDbnd.Path <- "//ad.sfwmd.gov/dfsroot/data/hpcc_shared/krodberg/NexRadTS"
+WMDbnd.Shape <- "CntyBnds.shp"
+setwd(WMDbnd.Path)
+WMDbnd <- readShapePoly(WMDbnd.Shape, proj4string = HARNSP17ft)
+
 ras <- raster(nrow=rasRows,ncol=rasCols,xmn=xmin,xmx=xmax,
               ymn=ymin,ymx=ymax,crs=HARNSP17ft)
 rasExt <- extent(ras)
 clpBnds2 <- gClip(WMDbnd, rasExt)
 
 SouthMost<-min(oneYr$Ycoord)-(pixSz) 
-oneYr<-rename(oneYr,wmmRoCo=variable)
+oneYr<-dplyr::rename(oneYr,wmmRoCo=variable)
 oneYr$Annual<-NULL
 oneYr$X<-NULL
 dateList<-names(oneYr)[-c(1,2,3)]
 iletter =0
 wideXtra<-NULL
+
 for (l in LETTERS[15:1]){
   y= SouthMost-(iletter*pixSz)
   iletter = iletter + 1
@@ -655,13 +784,13 @@ for (l in LETTERS[15:1]){
     wideXtra<-rbind(wideXtra,OneRowDF)
   }
 }
+
 names(wideXtra) <-c("wmmRoCo","Xcoord","Ycoord",dateList)
 oneYr<- rbind(oneYr,wideXtra)  
 oneYr$Xcoord <- as.numeric(oneYr$Xcoord)
 oneYr$Ycoord <- as.numeric(oneYr$Ycoord)
 
 closest<- nn2(oneYr[,2:3],rainGages[,3:4],1)
-
 index= closest[[1]]
 dist=closest[[2]]
 
@@ -678,7 +807,7 @@ oneYr$YHARN <- coordinates(oneYr)[, 2]
 oneYr <- spTransform(oneYr,HARNSP17ft)
 
 cat(paste('Establishing mutliprocessor Plan','\n'))
-plan(multiprocess,.skip=TRUE)
+plan(multisession,.skip=TRUE)
 calcRainMP <- listenv()
 
 #---------------------------------------------
@@ -686,7 +815,7 @@ calcRainMP <- listenv()
 #   Setup status bar printing calcRainStats
 #---------------------------------------------
 cat(paste('Calculating Rain statistics by year','\n'))
-cat(paste('\nWaiting for ',nyr, 
+cat(paste('\nWaiting for ',length(yrSeq), 
           'years of WMM rain bias correction to process','\n'))
 for (dig in seq(1,4)){
   for (yr in seq(1,length(yrSeq))){
@@ -702,66 +831,63 @@ for (yr in yrSeq){
   cat('] ')
   iy = iy + 1
   yr = yrSeq[iy]
-  RG<-rainGageData[rainGageData$YEAR==yr & 
-                     rainGageData$CODE %!in% codeFilter &
-                     rainGageData$VALUE >= 0.0,]
+  RG<-gageR.df[gageR.df$YEAR==yr & 
+                     gageR.df$CODE %!in% codeFilter &
+                     gageR.df$VALUE >= 0.0,]
   #calcRainMP[[iy]] <- calcRainStats(basePath,yr,wideXtra,RG)
   calcRainMP[[iy]] <- future({calcRainStats(basePath,yr,wideXtra,RG)})
 } 
 
 nyr = iy
-rainStat_data<-list()
-
+rainStatData<-list()
 for (i in seq(1:nyr)){
-  rainStat_data[[i]] <-value(calcRainMP[[i]])
+  rainStatData[[i]] <-future::value(calcRainMP[[i]])
 }
+
 #-------------------------------------------------------
 # unlist results returned from FUNCTION "calcRainStats"
 #-------------------------------------------------------
-Rain <-rainStat_data[[1]]$Rain
-RainStats <- rainStat_data[[1]]$RainStats
+Rain <-rainStatData[[1]]$Rain
+RainStats <- rainStatData[[1]]$RainStats
 if (nyr > 1){
   for (iy in seq(2,nyr)){
-    Rain <-rbind(Rain,rainStat_data[[iy]]$Rain)
-    RainStats <- rbind(RainStats,rainStat_data[[iy]]$RainStats)
+    Rain <-rbind(Rain,rainStatData[[iy]]$Rain)
+    RainStats <- rbind(RainStats,rainStatData[[iy]]$RainStats)
   }
 }
 allStats<-RainStats 
 names(allStats)<- c('RainGage','year','month','XCOORD','YCOORD',
                     'count','sum_Rain','sum_WMM','adjF')
 
-myTheme = rasterTheme(region = brewer.pal('Blues', n = 9))
-
 yearStr = '2017'
 monStr = '09'
-southernRain<-rainGageData[rainGageData$YEAR==yearStr & 
-                         rainGageData$MONTH==monStr &
-                         rainGageData$YCOORD <= SouthMost,]
+southRain<-gageR.df[gageR.df$YEAR==yearStr & 
+                         gageR.df$MONTH==monStr &
+                          gageR.df$CODE %!in% codeFilter &
+                         gageR.df$YCOORD <= SouthMost,]
 
 #Prepare 1 year of RaingGage Data South of WMM for voronoi process
-coordinates(southernRain) =  ~ XCOORD + YCOORD
-proj4string(southernRain) = HARNSP17ft
-southernRain$XHARN <- coordinates(southernRain)[, 1]
-southernRain$YHARN <- coordinates(southernRain)[, 2]
-southernRain <- spTransform(southernRain,HARNSP17ft)
+coordinates(southRain) =  ~ XCOORD + YCOORD
+proj4string(southRain) = HARNSP17ft
+southRain$XHARN <- coordinates(southRain)[, 1]
+southRain$YHARN <- coordinates(southRain)[, 2]
+southRain <- spTransform(southRain,HARNSP17ft)
 
 #------------------------------------------------------------
 # Initialize variables for multiprocessing function calls
 #------------------------------------------------------------
-
 processed= listenv(NULL)
 yrList=list()
 
-yearStr <- as.character(2017)
 #-------------------------------------------------
 # Define range of years to process
 #-------------------------------------------------
 processYears <- yrSeq
-
-cat(paste('Processing bias correction for each month of',
+cat(paste('\nProcessing bias correction for each month of',
           length(yrSeq), 'years\n'))
 x=0
 yr = processYears[1]
+mon = 1
 for (yr in processYears) {
   yearStr <- as.character(yr)
   cat (paste(yearStr,':'))
@@ -771,45 +897,43 @@ for (yr in processYears) {
     cat (paste(monStr," "))
     # Prepare single year of RaingGage Data South of WMM 
     #   for Theisen polygon processing
-    southernRain<-rainGageData[rainGageData$YEAR==yearStr & 
-                                 rainGageData$MONTH==monStr &
-                                 rainGageData$YCOORD < SouthMost,]
-    coordinates(southernRain) =  ~ XCOORD + YCOORD
-    proj4string(southernRain) = HARNSP17ft
-    southernRain$XHARN <- coordinates(southernRain)[, 1]
-    southernRain$YHARN <- coordinates(southernRain)[, 2]
-    southernRain <- spTransform(southernRain,HARNSP17ft)
+    southRain<-gageR.df[gageR.df$YEAR==yearStr & 
+                                 gageR.df$MONTH==monStr &
+                                 gageR.df$YCOORD < SouthMost,]
+    coordinates(southRain) =  ~ XCOORD + YCOORD
+    proj4string(southRain) = HARNSP17ft
+    southRain$XHARN <- coordinates(southRain)[, 1]
+    southRain$YHARN <- coordinates(southRain)[, 2]
+    southRain <- spTransform(southRain,HARNSP17ft)
     
-    #-----------------------------------------------------------
-    # Call FUNCTION "biasByYearMon" 
-    #   with futures multiprocessing wrapper function
     #-----------------------------------------------------------    
     # multiprocessor function call    
+    #-----------------------------------------------------------    
     processed[[x]] <- future({biasByYearMon(basePath,allStats,Rain,
-                                            southernRain,yearStr,monStr,x)})
+                                            southRain,yearStr,monStr,x)})
+    #-----------------------------------------------------------    
     # single processor function call    
+    #-----------------------------------------------------------    
     # processed[[x]] <- biasByYearMon(basePath,allStats,Rain,
-    #                                 southernRain,yearStr,monStr,x)
+    #                                 southRain,yearStr,monStr,x)
   }
   cat('\n')
 }
 
-#-------------------------------------------------
-# value function waits for results to become available
-# for each process
-#-------------------------------------------------
+#-------------------------------------------------------
+# value function waits for processed results to become 
+# available for each process
+#-------------------------------------------------------
 cat(paste('Waiting for bias correction processes to return','\n'))
-
 mpList<-list()
 rList<-list()
-
 # retrieve multiprocessor function call result  values 
 for (i in seq(1:x)){
-  mpList <-value(processed[[i]])
+  mpList <-future::value(processed[[i]])
   rList[[i]]<-mpList
 }
 
-# process function call reurn results
+# process function call reurn results when not using futures
 # for (i in seq(1:x)){
 #  mpList <-processed[[i]]
 #  rList[[i]]<-mpList
@@ -818,15 +942,15 @@ for (i in seq(1:x)){
 #-------------------------------------------------
 # unlist results returned from FUNCTION "biasByYearMon"
 #-------------------------------------------------
-
-stackList = unlist(lapply(rList,"[[",1))
+bias.ras.List = unlist(lapply(rList,"[[",1))
 pointList = unlist(lapply(rList,"[[",2))
 AnnRainList = unlist(lapply(rList,"[[",3))
 AnnWMMList = unlist(lapply(rList,"[[",4))
 yrList = unlist(lapply(rList,"[[",5))
 MonthList = unlist(lapply(rList,"[[",6))
 
-outPath <-  paste0(basePath,"BiasPlotsWMMb0.5-3.0/")
+#outPath <-  paste0(basePath,"BiasPlotsWMMb0.5-4.0/")
+outPath <-  paste0(basePath,"BiasPlotsWMMb.99-1.01/")
 filePath<- outPath
 cat(paste('Exporting csv files','\n'))
 for (iyr in processYears){
@@ -862,17 +986,12 @@ for (iyr in processYears){
 }
 
 cat(paste('producing maps','\n'))
-rasStack <-stack()
-rasStack <-stack(stackList)
-MonRasStack <-stack()
-MonRasStack <-stack(AnnRainList)
-MonWMMStack <-stack()
-MonWMMStack <-stack(AnnWMMList)
-
-#yearList <-as.character(processYears)
-#names(rasStack)<- yearList
-#names(AnnrasStack)<- yearList
-#names(AnnWMMStack)<- yearList
+bias.ras.Stack <-stack()
+bias.ras.Stack <-stack(bias.ras.List)
+adjWMM.ras.Stack <-stack()
+adjWMM.ras.Stack <-stack(AnnRainList)
+wmmR.ras.Stack <-stack()
+wmmR.ras.Stack <-stack(AnnWMMList)
 
 yearList <-as.character(processYears)
 StackNames = list()
@@ -880,28 +999,43 @@ x = 0
 yr = processYears[1]
 for (yr in processYears) {
   for (mon in seq(1, 12)) {
-    #for (mon in seq(9, 12)) {
     x = x + 1
     StackNames[x] <- sprintf("%4d%02d",yr, mon)
   }
 }
-names(rasStack)<- StackNames
-names(MonRasStack)<- StackNames
-names(MonWMMStack)<- StackNames
-
+names(bias.ras.Stack)<- StackNames
+names(adjWMM.ras.Stack)<- StackNames
+names(wmmR.ras.Stack)<- StackNames
 
 ps<-listenv()
-cat(paste('Plotting', nlayers(rasStack), 'rain comparison maps \n'))
-for (i in 1:nlayers(rasStack)){
-  pntsPlt<- pointList[[i]]
+cat(paste('Plotting', nlayers(bias.ras.Stack), 'rain comparison maps \n'))
+
+for (i in 1:nlayers(bias.ras.Stack)){
+#for (i in seq(1,12)){
+  gageR.pnts<- pointList[[i]]
+  aggR.pnts <-aggPnts(gageR.pnts)
   # Plot Monthly wmmRain
-  PltName <-names(MonWMMStack)[i]
-  MonWMMPlt <- MonWMMStack[[i]]
-  rasPlt <- rasStack[[i]]
-  AdjPlt <- MonRasStack[[i]]
-  diffPlt <- AdjPlt - MonWMMPlt
-  ps[[i]] <- plt4rasters(outPath,PltName,
-                           MonWMMPlt,rasPlt,AdjPlt,diffPlt,pntsPlt)
-  if (i%/%10 == (i/10)){cat(i)} else { cat('.') }
+  pltName <-names(wmmR.ras.Stack)[i]
+  wmmR.ras <- wmmR.ras.Stack[[i]]
+  bias.ras <- bias.ras.Stack[[i]]
+  adjR.ras <- adjWMM.ras.Stack[[i]]
+  diffR.ras <- adjR.ras - wmmR.ras
+
+  #------------------------------   
+  # multiprocessor function call    
+  #------------------------------   
+  ps[[i]] %<-%
+  	plt4ras(outPath,pltName,
+  	        wmmR.ras,bias.ras,adjR.ras,diffR.ras,gageR.pnts,aggR.pnts)
+  #------------------------------   
+  # single processor function call    
+  #------------------------------   
+  # ps[[i]] <- plt4ras(outPath,pltName,   wmmR.ras,bias.ras,adjR.ras,diffR.ras,gageR.pnts,aggR.pnts)
+  #------------------------------   
+  txt<-sprintf('%03d',i)
+  if (i%/%10 == (i/10)){cat(txt)} else { cat('.') }
+  if (i%/%60 == (i/60)){cat('\n')}
 }
-cat('\n')
+cat(paste0(txt,'\n'))
+'//ad.sfwmd.gov/dfsroot/data/wsd/GIS/GISP_2012/DistrictAreaProj/ECSM/Data/BiasPlotsWMMb.99-1.01'
+
