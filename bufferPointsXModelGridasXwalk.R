@@ -1,7 +1,9 @@
 #--------------------------------------------------------------------------
 #  Program: bufferPointsXModelGrid.R
 #  Author:  Kevin A. Rodberg, Science Supervisor, Water Supply Bureau
-#           5/14/2018; 7/29/2020
+#           5/14/2018; 7/29/2020; 
+#           9/16/2024: results were coming out striped other than ET
+#                      see NRDsub change
 #  Purpose: Crosswalk/Lookup table for NexRad Pixel to Model Row and Column
 #           Using Nearest Neighbor searching algorithm (FNN::get.knn)
 #--------------------------------------------------------------------------
@@ -35,7 +37,8 @@ readPoints <- function(csvFile){
   #  data frame
   #-------------------------------------------------
   NRD <- utils::read.csv(csvFile)
-  NRDsub <- NRD[!NRD[,length(NRD)]==0,]
+ # NRDsub <- NRD[!NRD[,length(NRD)]==0,]
+  NRDsub <- NRD  # Previous code resulted in striped RECH, RUNOFF and RAIN
   head(NRDsub)
   names(NRDsub)<- c("Pixel_id", "X", "Y" )
 	NRDsub$PIX_INDX<-seq.int(nrow(NRDsub))
@@ -145,6 +148,7 @@ while (!resolved(g)){
 cat("\n")
 
 #PixelCoords <-future::value(f)
+gPrime <-future::value(g) 
 ModelGridCoords <-future::value(g)
 PixelCoords <-f
 # ModelGridCoords <-g
@@ -157,6 +161,7 @@ cat(paste('Background processing is complete','\n'))
 NearNeighbor <- FNN::get.knnx(PixelCoords[,2:3],ModelGridCoords[,3:4],1)
 ClosestPixels <- NearNeighbor[["nn.index"]]
 ClosestDistance <- NearNeighbor[["nn.dist"]]
+
 CpixDist <- as.data.frame(cbind(as.character(PixelCoords[ClosestPixels,1]),ClosestDistance))
 CpixDist <- cbind(CpixDist,PixelCoords[ClosestPixels,4])
 #CpixDist <- as.data.frame(cbind(as.character(PixelCoords[ClosestPixels,c(1,4)]),ClosestDistance))
